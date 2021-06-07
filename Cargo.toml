@@ -1,0 +1,13 @@
+[package]
+name = "aactor"
+version = "0.1.0"
+authors = ["Aatif Syed <aatif.syed@metaswitch.com>"]
+edition = "2018"
+publish = ["metaswitch"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-std = "1.9.0"
+async-trait = "0.1.50"
+futures = "0.3.15"
