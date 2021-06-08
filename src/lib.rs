@@ -1,7 +1,5 @@
 mod actor;
-mod bidirectional_channel;
-
-pub use bidirectional_channel::{new, Receiver, Sender};
+pub mod channel;
 
 #[cfg(test)]
 mod tests {
