@@ -6,7 +6,7 @@ pub use mpsc::Receiver;
 pub type Response<T> = oneshot::Receiver<T>;
 #[must_use = "You must respond to the request"] // TODO doesn't work
 pub struct Request<Req, Resp> {
-    request: Req,
+    pub request: Req,
     responder: oneshot::Sender<Resp>,
 }
 
