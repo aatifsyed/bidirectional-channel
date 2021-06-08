@@ -7,14 +7,17 @@ pub type Response<T> = oneshot::Receiver<T>;
 #[must_use = "You must respond to the request"]
 pub type Responder<T> = oneshot::Sender<T>;
 
-pub struct IncomingRequest<Req, Resp>(pub Req, pub Responder<Resp>);
+pub struct IncomingRequest<Req, Resp> {
+    pub request: Req,
+    pub responder: Responder<Resp>,
+}
 
 impl<Req, Resp> IncomingRequest<Req, Resp>
 where
     Resp: Debug,
 {
     pub fn respond(self, response: Resp) -> Result<(), Resp> {
-        self.1.send(response)
+        self.responder.send(response)
     }
 }
 
@@ -29,7 +32,7 @@ impl<Req, Resp> Sender<Req, Resp> {
     ) -> Result<Response<Resp>, mpsc::SendError<IncomingRequest<Req, Resp>>> {
         let (responder, response) = oneshot::channel();
         self.outgoing
-            .send(IncomingRequest(request, responder))
+            .send(IncomingRequest { request, responder })
             .await?;
         Ok(response)
     }
@@ -66,11 +69,11 @@ use std::ops::{Deref, DerefMut};
 impl<Req, Resp> Deref for IncomingRequest<Req, Resp> {
     type Target = Req;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.request
     }
 }
 impl<Req, Resp> DerefMut for IncomingRequest<Req, Resp> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.request
     }
 }
