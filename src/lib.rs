@@ -4,7 +4,7 @@
 #[deny(missing_docs)]
 use async_std::channel;
 pub use async_std::channel::Receiver as Responder;
-use derive_more::{AsMut, AsRef, From};
+use derive_more::{AsMut, AsRef, Deref, DerefMut, From};
 use futures::channel::oneshot;
 pub type FutureResponse<T> = oneshot::Receiver<T>;
 
@@ -21,7 +21,7 @@ mod impl_respond {
     impl<Req, Resp> Respond<Resp> for ReceivedRequest<Req, Resp> {
         type Owned = Req;
         fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
-            match self.responder.respond(response) {
+            match self.unresponded.respond(response) {
                 Ok(_) => Ok(self.request),
                 Err((_, response)) => Err((self.request, response)),
             }
@@ -31,19 +31,9 @@ mod impl_respond {
     impl<Resp> Respond<Resp> for UnRespondedRequest<Resp> {
         type Owned = ();
         fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
-            self.responder
+            self.response_sender
                 .send(response)
                 .map_err(|response| ((), response))
-        }
-    }
-
-    impl<Req, Resp> Respond<Resp> for (Req, UnRespondedRequest<Resp>) {
-        type Owned = Req;
-        fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
-            match self.1.respond(response) {
-                Ok(_) => Ok(self.0),
-                Err((_, response)) => Err((self.0, response)),
-            }
         }
     }
 }
@@ -52,25 +42,27 @@ mod impl_respond {
 /// Must be used by calling [`Respond::respond`].
 #[must_use = "You must respond to the request"]
 pub struct UnRespondedRequest<Resp> {
-    responder: oneshot::Sender<Resp>,
+    response_sender: oneshot::Sender<Resp>,
 }
 
 /// Represents the request.
-/// This implements [`AsRef`] and [`AsMut`] for the request itself.
-/// May also be destructured.
-/// Must be used by calling [`Respond::respond`].
+/// This implements [`AsRef`] and [`AsMut`] for the request itself for explicit use.
+/// Alternatively, you may use [`Deref`] and [`DerefMut`] either explicitly, or coerced.
+/// Must be used by calling [`Respond::respond`], or destructured.
 #[must_use = "You must respond to the request"]
-#[derive(AsRef, AsMut, From)]
+#[derive(AsRef, AsMut, From, Deref, DerefMut)]
 pub struct ReceivedRequest<Req, Resp> {
     #[as_ref]
     #[as_mut]
+    #[deref]
+    #[deref_mut]
     pub request: Req,
-    pub responder: UnRespondedRequest<Resp>,
+    pub unresponded: UnRespondedRequest<Resp>,
 }
 
 /// Represents the initiator for the request-response exchange
 pub struct Requester<Req, Resp> {
-    outgoing: channel::Sender<(Req, UnRespondedRequest<Resp>)>,
+    outgoing: channel::Sender<ReceivedRequest<Req, Resp>>,
 }
 
 impl<Req, Resp> Requester<Req, Resp> {
@@ -80,19 +72,16 @@ impl<Req, Resp> Requester<Req, Resp> {
         // Create the return path
         let (response_sender, response_receiver) = oneshot::channel();
         self.outgoing
-            .send((
+            .send(ReceivedRequest {
                 request,
-                UnRespondedRequest {
-                    responder: response_sender,
-                },
-            ))
+                unresponded: UnRespondedRequest { response_sender },
+            })
             .await
-            .map_err(|e| e.into_inner().0)?;
+            .map_err(|e| e.into_inner().request)?;
         Ok(response_receiver)
     }
 }
 
-#[cfg_attr(doc, aquamarine::aquamarine)]
 /// Create a bounded [`Requester`]-[`Responder`] pair.  
 /// That is, once the channel is full, future senders will yield when awaiting until there's space again
 ///
@@ -103,20 +92,21 @@ impl<Req, Resp> Requester<Req, Resp> {
 ///     Responder ->> Requester: response
 /// ```
 ///
-/// When a [`Responder`] is asked to receive a request, it returns a `(Request, [UnRespondedRequest<Response>])` pair.
+/// When a [`Responder`] is asked to receive a request, it returns a [`ReceivedRequest`]
 /// The latter should be used to communicate back to the sender
 ///
 /// ```
 /// # async_std::task::block_on( async {
-/// let (requester, responder) = bidirectional_channel::bounded::<String, usize>(10);
-/// let response = requester.send(String::from("hello")).await.unwrap();
+/// use bidirectional_channel::Respond; // Don't forget to import this trait
+/// let (requester, responder) = bidirectional_channel::bounded(10);
+/// let future_response = requester.send(String::from("hello")).await.unwrap();
 ///
-/// // This side of the channel receives strings, and responds with their length
-/// let (request, unfulfilled_response) = responder.recv().await.unwrap();
-/// let len = request.len();
-/// unfulfilled_response.respond(len).unwrap();
+/// // This side of the channel receives Strings, and responds with their length
+/// let received_request = responder.recv().await.unwrap();
+/// let len = received_request.len(); // Deref coercion to the actual request
+/// received_request.respond(len).unwrap();
 ///
-/// assert!(response.await.unwrap() == 5);
+/// assert!(future_response.await.unwrap() == 5);
 /// # })
 /// ```
 pub fn bounded<Req, Resp>(
