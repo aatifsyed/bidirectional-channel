@@ -1,14 +1,36 @@
-//! An async channel with request-response semantics
-//! See the [`bounded`] function documentation for more
+#![deny(missing_docs)]
+//! An async channel with request-response semantics.  
+//! When a [`Responder`] is asked to receive a request, it returns a [`ReceivedRequest`],
+//! which should be used to communicate back to the sender
+//!
+//! ```
+//! # async_std::task::block_on( async {
+//! use bidirectional_channel::Respond; // Don't forget to import this trait
+//! let (requester, responder) = bidirectional_channel::bounded(10);
+//! let future_response = requester.send(String::from("hello")).await.unwrap();
+//!
+//! // This side of the channel receives Strings, and responds with their length
+//! let received_request = responder.recv().await.unwrap();
+//! let len = received_request.len(); // Deref coercion to the actual request
+//! received_request.respond(len).unwrap();
+//!
+//! assert!(future_response.await.unwrap() == 5);
+//! # })
+//! ```
 
-#[deny(missing_docs)]
 use async_std::channel;
 pub use async_std::channel::Receiver as Responder;
 use derive_more::{AsMut, AsRef, Deref, DerefMut, From};
 use futures::channel::oneshot;
+#[allow(unused_imports)]
+use std::ops::{Deref, DerefMut}; // Doc links
+
+/// Represents waiting for the [`Responder`] to [`Respond::respond`].
 pub type FutureResponse<T> = oneshot::Receiver<T>;
 
-pub trait Respond<Resp> {
+/// Represents fullfilling a [`Requester`]'s request.
+/// This trait is sealed - types external to this crate may not implement it.
+pub trait Respond<Resp>: impl_respond::Sealed {
     /// If the implementer owns any data, it is given back to the user on both receipt and failure
     type Owned;
     /// Fullfill our obligation to the [`Requester`] by responding to their request
@@ -16,6 +38,10 @@ pub trait Respond<Resp> {
 }
 
 mod impl_respond {
+    pub trait Sealed {}
+    impl<Req, Resp> Sealed for ReceivedRequest<Req, Resp> {}
+    impl<Resp> Sealed for UnRespondedRequest<Resp> {}
+
     use super::{ReceivedRequest, Respond, UnRespondedRequest};
 
     impl<Req, Resp> Respond<Resp> for ReceivedRequest<Req, Resp> {
@@ -52,11 +78,13 @@ pub struct UnRespondedRequest<Resp> {
 #[must_use = "You must respond to the request"]
 #[derive(AsRef, AsMut, From, Deref, DerefMut)]
 pub struct ReceivedRequest<Req, Resp> {
+    /// The request itself
     #[as_ref]
     #[as_mut]
     #[deref]
     #[deref_mut]
     pub request: Req,
+    /// Handle to [`Respond::respond`] to the [`Requester`]
     pub unresponded: UnRespondedRequest<Resp>,
 }
 
@@ -84,31 +112,6 @@ impl<Req, Resp> Requester<Req, Resp> {
 
 /// Create a bounded [`Requester`]-[`Responder`] pair.  
 /// That is, once the channel is full, future senders will yield when awaiting until there's space again
-///
-/// Terminology is as follows:
-/// ```mermaid
-/// sequenceDiagram
-///     Requester ->> Responder: request
-///     Responder ->> Requester: response
-/// ```
-///
-/// When a [`Responder`] is asked to receive a request, it returns a [`ReceivedRequest`]
-/// The latter should be used to communicate back to the sender
-///
-/// ```
-/// # async_std::task::block_on( async {
-/// use bidirectional_channel::Respond; // Don't forget to import this trait
-/// let (requester, responder) = bidirectional_channel::bounded(10);
-/// let future_response = requester.send(String::from("hello")).await.unwrap();
-///
-/// // This side of the channel receives Strings, and responds with their length
-/// let received_request = responder.recv().await.unwrap();
-/// let len = received_request.len(); // Deref coercion to the actual request
-/// received_request.respond(len).unwrap();
-///
-/// assert!(future_response.await.unwrap() == 5);
-/// # })
-/// ```
 pub fn bounded<Req, Resp>(
     capacity: usize,
 ) -> (Requester<Req, Resp>, Responder<ReceivedRequest<Req, Resp>>) {
