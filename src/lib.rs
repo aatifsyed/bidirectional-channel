@@ -1,28 +1,71 @@
-//! A standard async channel, except the receiver can respond to each message, and the sender can await for that response.
+//! An async channel with request-response semantics
 //! See the [`bounded`] function documentation for more
 
 #[deny(missing_docs)]
 use async_std::channel;
 pub use async_std::channel::Receiver as Responder;
+use derive_more::{AsMut, AsRef, From};
 use futures::channel::oneshot;
-use std::fmt::Debug;
 pub type FutureResponse<T> = oneshot::Receiver<T>;
 
-/// Received by the [`Responder`] - represents that the [`Requester`] associated with this channel is still waiting for a response.
-/// Must be used.
+pub trait Respond<Resp> {
+    /// If the implementer owns any data, it is given back to the user on both receipt and failure
+    type Owned;
+    /// Fullfill our obligation to the [`Requester`] by responding to their request
+    fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)>;
+}
+
+mod impl_respond {
+    use super::{ReceivedRequest, Respond, UnRespondedRequest};
+
+    impl<Req, Resp> Respond<Resp> for ReceivedRequest<Req, Resp> {
+        type Owned = Req;
+        fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
+            match self.responder.respond(response) {
+                Ok(_) => Ok(self.request),
+                Err((_, response)) => Err((self.request, response)),
+            }
+        }
+    }
+
+    impl<Resp> Respond<Resp> for UnRespondedRequest<Resp> {
+        type Owned = ();
+        fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
+            self.responder
+                .send(response)
+                .map_err(|response| ((), response))
+        }
+    }
+
+    impl<Req, Resp> Respond<Resp> for (Req, UnRespondedRequest<Resp>) {
+        type Owned = Req;
+        fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
+            match self.1.respond(response) {
+                Ok(_) => Ok(self.0),
+                Err((_, response)) => Err((self.0, response)),
+            }
+        }
+    }
+}
+
+/// Represents that the [`Requester`] associated with this communication is still waiting for a response.
+/// Must be used by calling [`Respond::respond`].
 #[must_use = "You must respond to the request"]
 pub struct UnRespondedRequest<Resp> {
     responder: oneshot::Sender<Resp>,
 }
 
-impl<Resp> UnRespondedRequest<Resp>
-where
-    Resp: Debug,
-{
-    /// Fullfill our obligation to the [`Requester`].
-    pub fn respond(self, response: Resp) -> Result<(), Resp> {
-        self.responder.send(response)
-    }
+/// Represents the request.
+/// This implements [`AsRef`] and [`AsMut`] for the request itself.
+/// May also be destructured.
+/// Must be used by calling [`Respond::respond`].
+#[must_use = "You must respond to the request"]
+#[derive(AsRef, AsMut, From)]
+pub struct ReceivedRequest<Req, Resp> {
+    #[as_ref]
+    #[as_mut]
+    pub request: Req,
+    pub responder: UnRespondedRequest<Resp>,
 }
 
 /// Represents the initiator for the request-response exchange
@@ -78,10 +121,7 @@ impl<Req, Resp> Requester<Req, Resp> {
 /// ```
 pub fn bounded<Req, Resp>(
     capacity: usize,
-) -> (
-    Requester<Req, Resp>,
-    Responder<(Req, UnRespondedRequest<Resp>)>,
-) {
+) -> (Requester<Req, Resp>, Responder<ReceivedRequest<Req, Resp>>) {
     let (sender, receiver) = channel::bounded(capacity);
     (Requester { outgoing: sender }, receiver)
 }
