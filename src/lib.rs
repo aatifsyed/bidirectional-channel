@@ -1,32 +1,53 @@
 #![deny(missing_docs)]
+#![deny(unused)]
 //! An async channel with request-response semantics.  
 //! When a [`Responder`] is asked to receive a request, it returns a [`ReceivedRequest`],
 //! which should be used to communicate back to the sender
 //!
 //! ```
+//! # use futures::join;
 //! # async_std::task::block_on( async {
-//! use bidirectional_channel::Respond; // Don't forget to import this trait
-//! let (requester, responder) = bidirectional_channel::bounded(10);
-//! let future_response = requester.send(String::from("hello")).await.unwrap();
-//!
-//! // This side of the channel receives Strings, and responds with their length
-//! let received_request = responder.recv().await.unwrap();
-//! let len = received_request.len(); // Deref coercion to the actual request
-//! received_request.respond(len).unwrap();
-//!
-//! assert!(future_response.await.unwrap() == 5);
+//! use bidirectional_channel::{bounded, Respond};
+//! let (requester, responder) = bounded(1);
+//! let requester = async { requester.send("hello").await.unwrap() };
+//! let responder = async {
+//!     let request = responder.recv().await.unwrap();
+//!     let len = request.len();
+//!     request.respond(len).unwrap()
+//! };
+//! let (response, request) = join!(requester, responder);
+//! assert!(request.len() == response)
 //! # })
 //! ```
 
 use async_std::channel;
 pub use async_std::channel::Receiver as Responder;
-use derive_more::{AsMut, AsRef, Deref, DerefMut, From};
+use derive_more::{AsMut, AsRef, Deref, DerefMut};
 use futures::channel::oneshot;
+use std::fmt::Debug;
 #[allow(unused_imports)]
 use std::ops::{Deref, DerefMut}; // Doc links
+use thiserror::Error;
 
-/// Represents waiting for the [`Responder`] to [`Respond::respond`].
-pub type FutureResponse<T> = oneshot::Receiver<T>;
+/// Error returned when sending a request
+#[derive(Error)]
+pub enum SendRequestError<Req> {
+    /// The [`Responder`] for this channel was dropped.
+    /// Returns ownership of the `Req` that failed to send
+    #[error("The Responder was dropped before the message was sent")]
+    Closed(Req),
+    /// The [`UnRespondedRequest`] for this request was dropped.
+    #[error("The UnRespondedRequest was dropped, not responded to")]
+    Ignored,
+}
+impl<Req> Debug for SendRequestError<Req> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Closed(_) => write!(f, "Closed(..)"),
+            Self::Ignored => write!(f, "Cancelled"),
+        }
+    }
+}
 
 /// Represents fullfilling a [`Requester`]'s request.
 /// This trait is sealed - types external to this crate may not implement it.
@@ -76,7 +97,7 @@ pub struct UnRespondedRequest<Resp> {
 /// Alternatively, you may use [`Deref`] and [`DerefMut`] either explicitly, or coerced.
 /// Must be used by calling [`Respond::respond`], or destructured.
 #[must_use = "You must respond to the request"]
-#[derive(AsRef, AsMut, From, Deref, DerefMut)]
+#[derive(AsRef, AsMut, Deref, DerefMut)]
 pub struct ReceivedRequest<Req, Resp> {
     /// The request itself
     #[as_ref]
@@ -96,7 +117,7 @@ pub struct Requester<Req, Resp> {
 impl<Req, Resp> Requester<Req, Resp> {
     /// Make a request.
     /// The [`FutureResponse`] should be `await`ed to get the response from the responder
-    pub async fn send(&self, request: Req) -> Result<FutureResponse<Resp>, Req> {
+    pub async fn send(&self, request: Req) -> Result<Resp, SendRequestError<Req>> {
         // Create the return path
         let (response_sender, response_receiver) = oneshot::channel();
         self.outgoing
@@ -105,8 +126,11 @@ impl<Req, Resp> Requester<Req, Resp> {
                 unresponded: UnRespondedRequest { response_sender },
             })
             .await
-            .map_err(|e| e.into_inner().request)?;
-        Ok(response_receiver)
+            .map_err(|e| SendRequestError::Closed(e.into_inner().request))?;
+        let response = response_receiver
+            .await
+            .map_err(|_| SendRequestError::Ignored)?;
+        Ok(response)
     }
 }
 
