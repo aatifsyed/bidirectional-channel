@@ -7,7 +7,8 @@ keywords = ["channel", "async", "request", "response"]
 license = "MIT OR Apache-2.0"
 name = "bidirectional-channel"
 repository = "https://github.com/aatifsyed/bidirectional-channel"
-version = "0.2.3"
+version = "0.3.0"
+publish = ["crates-io"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

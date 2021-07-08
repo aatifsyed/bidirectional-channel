@@ -26,25 +26,29 @@
 </div>
 
 ```rust
-use bidirectional_channel::{bounded, Respond};
+use bidirectional_channel::{bounded};
 use futures::join;
 
 let (requester, responder) = bounded(1);
 
-// A request "thread"
-let requester = async { 
-    requester.send("hello").await.unwrap().await.unwrap() 
+// A requesting task
+let requester = async {
+    requester
+        .send("hello")
+        .await
+        .expect("Responder or UnRespondedRequest was dropped")
 };
 
-// A response "thread"
-// This one recieves a &str, and returns its length
+// A responding task.
+// This receives an &str, and returns its length
 let responder = async {
-    let request = responder.recv().await.unwrap();
+    let request = responder.recv().await.expect("Requester was dropped");
     let len = request.len();
     request.respond(len).unwrap()
 };
 
-// Run them both together
+// Perform the exchange
 let (response, request) = join!(requester, responder);
+
 assert!(request.len() == response)
 ```
