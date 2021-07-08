@@ -49,6 +49,5 @@ let responder = async {
 
 // Perform the exchange
 let (response, request) = join!(requester, responder);
-
 assert!(request.len() == response)
 ```
