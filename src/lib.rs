@@ -7,7 +7,7 @@
 //! ```
 //! # use futures::join;
 //! # async_std::task::block_on( async {
-//! use bidirectional_channel::{bounded, Respond};
+//! use bidirectional_channel::{bounded};
 //! let (requester, responder) = bounded(1);
 //! let requester = async { requester.send("hello").await.unwrap() };
 //! let responder = async {
