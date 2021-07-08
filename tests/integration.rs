@@ -1,5 +1,5 @@
 use async_std::test;
-use bidirectional_channel::{bounded, Respond, SendRequestError};
+use bidirectional_channel::{bounded, SendRequestError};
 use futures::join;
 use ntest::timeout;
 

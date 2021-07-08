@@ -49,47 +49,17 @@ impl<Req> Debug for SendRequestError<Req> {
     }
 }
 
-/// Represents fullfilling a [`Requester`]'s request.
-/// This trait is sealed - types external to this crate may not implement it.
-pub trait Respond<Resp>: impl_respond::Sealed {
-    /// If the implementer owns any data, it is given back to the user on both receipt and failure
-    type Owned;
-    /// Fullfill our obligation to the [`Requester`] by responding to their request
-    fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)>;
-}
-
-mod impl_respond {
-    pub trait Sealed {}
-    impl<Req, Resp> Sealed for ReceivedRequest<Req, Resp> {}
-    impl<Resp> Sealed for UnRespondedRequest<Resp> {}
-
-    use super::{ReceivedRequest, Respond, UnRespondedRequest};
-
-    impl<Req, Resp> Respond<Resp> for ReceivedRequest<Req, Resp> {
-        type Owned = Req;
-        fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
-            match self.unresponded.respond(response) {
-                Ok(_) => Ok(self.request),
-                Err((_, response)) => Err((self.request, response)),
-            }
-        }
-    }
-
-    impl<Resp> Respond<Resp> for UnRespondedRequest<Resp> {
-        type Owned = ();
-        fn respond(self, response: Resp) -> Result<Self::Owned, (Self::Owned, Resp)> {
-            self.response_sender
-                .send(response)
-                .map_err(|response| ((), response))
-        }
-    }
-}
-
 /// Represents that the [`Requester`] associated with this communication is still waiting for a response.
-/// Must be used by calling [`Respond::respond`].
 #[must_use = "You must respond to the request"]
 pub struct UnRespondedRequest<Resp> {
     response_sender: oneshot::Sender<Resp>,
+}
+impl<Resp> UnRespondedRequest<Resp> {
+    /// Respond to the [`Requester`]'s request.
+    /// Fails if the associated [`Requester`] was dropped, and returns your response back
+    pub fn respond(self, response: Resp) -> Result<(), Resp> {
+        self.response_sender.send(response)
+    }
 }
 
 /// Represents the request.
@@ -109,6 +79,16 @@ pub struct ReceivedRequest<Req, Resp> {
     pub unresponded: UnRespondedRequest<Resp>,
 }
 
+impl<Req, Resp> ReceivedRequest<Req, Resp> {
+    /// Respond to the [`Requester`]'s request, and take ownership of it
+    /// Fails if the associated [`Requester`] was dropped, and returns your response back
+    pub fn respond(self, response: Resp) -> Result<Req, (Req, Resp)> {
+        match self.unresponded.respond(response) {
+            Ok(_) => Ok(self.request),
+            Err(response) => Err((self.request, response)),
+        }
+    }
+}
 /// Represents the initiator for the request-response exchange
 pub struct Requester<Req, Resp> {
     outgoing: channel::Sender<ReceivedRequest<Req, Resp>>,
