@@ -21,6 +21,7 @@
 //! ```
 
 use async_std::channel;
+/// An [`async_std::channel::Receiver`] which receives an [`UnRespondedRequest<Req, Resp>`] instead of a `Req`.
 pub use async_std::channel::Receiver as Responder;
 use derive_more::{AsMut, AsRef, Deref, DerefMut};
 use futures::channel::oneshot;
@@ -65,7 +66,7 @@ impl<Resp> UnRespondedRequest<Resp> {
 /// Represents the request.
 /// This implements [`AsRef`] and [`AsMut`] for the request itself for explicit use.
 /// Alternatively, you may use [`Deref`] and [`DerefMut`] either explicitly, or coerced.
-/// Must be used by calling [`Respond::respond`], or destructured.
+/// Must be used by calling [`ReceivedRequest::respond`], or destructured.
 #[must_use = "You must respond to the request"]
 #[derive(AsRef, AsMut, Deref, DerefMut)]
 pub struct ReceivedRequest<Req, Resp> {
@@ -75,7 +76,7 @@ pub struct ReceivedRequest<Req, Resp> {
     #[deref]
     #[deref_mut]
     pub request: Req,
-    /// Handle to [`Respond::respond`] to the [`Requester`]
+    /// Handle to respond to the [`Requester`]
     pub unresponded: UnRespondedRequest<Resp>,
 }
 
@@ -90,13 +91,14 @@ impl<Req, Resp> ReceivedRequest<Req, Resp> {
     }
 }
 /// Represents the initiator for the request-response exchange
+#[derive(Clone)]
 pub struct Requester<Req, Resp> {
     outgoing: channel::Sender<ReceivedRequest<Req, Resp>>,
 }
 
 impl<Req, Resp> Requester<Req, Resp> {
     /// Make a request.
-    /// The [`FutureResponse`] should be `await`ed to get the response from the responder
+    /// `await` the result to receive the response.
     pub async fn send(&self, request: Req) -> Result<Resp, SendRequestError<Req>> {
         // Create the return path
         let (response_sender, response_receiver) = oneshot::channel();
