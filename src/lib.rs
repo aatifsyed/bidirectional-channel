@@ -26,8 +26,8 @@ pub use async_std::channel::Receiver as Responder;
 use derive_more::{AsMut, AsRef, Deref, DerefMut};
 use futures::channel::oneshot;
 use std::fmt::Debug;
-#[allow(unused_imports)]
-use std::ops::{Deref, DerefMut}; // Doc links
+#[cfg(doc)]
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 /// Error returned when sending a request
@@ -90,6 +90,16 @@ impl<Req, Resp> ReceivedRequest<Req, Resp> {
         }
     }
 }
+
+impl<Req, Resp> Into<(Req, UnRespondedRequest<Resp>)> for ReceivedRequest<Req, Resp> {
+    fn into(self) -> (Req, UnRespondedRequest<Resp>) {
+        let ReceivedRequest {
+            request,
+            unresponded,
+        } = self;
+        (request, unresponded)
+    }
+}
 /// Represents the initiator for the request-response exchange
 #[derive(Clone)]
 pub struct Requester<Req, Resp> {
@@ -122,5 +132,11 @@ pub fn bounded<Req, Resp>(
     capacity: usize,
 ) -> (Requester<Req, Resp>, Responder<ReceivedRequest<Req, Resp>>) {
     let (sender, receiver) = channel::bounded(capacity);
+    (Requester { outgoing: sender }, receiver)
+}
+
+/// Create an ubounded [`Requester`]-[`Responder`] pair.  
+pub fn unbounded<Req, Resp>() -> (Requester<Req, Resp>, Responder<ReceivedRequest<Req, Resp>>) {
+    let (sender, receiver) = channel::unbounded();
     (Requester { outgoing: sender }, receiver)
 }
